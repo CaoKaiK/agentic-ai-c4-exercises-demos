@@ -1,13 +1,13 @@
 from typing import Dict, List, Any, Optional
 import os
-import dotenv
+from dotenv import load_dotenv, find_dotenv
 import random
 import time
 from smolagents import ToolCallingAgent, OpenAIServerModel, tool
 import json
 
-dotenv.load_dotenv(dotenv_path="../.env")
-openai_api_key = os.getenv("UDACITY_OPENAI_API_KEY")
+load_dotenv(find_dotenv(), override=True)
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 model = OpenAIServerModel(
     model_id="gpt-4o-mini",
@@ -259,7 +259,7 @@ class RequestAnalysisAgent(ToolCallingAgent):
 class UrgencyDetectorAgent(ToolCallingAgent):
     def __init__(self, model_to_use: OpenAIServerModel):
         super().__init__(
-            tools=[analyze_request_urgency], 
+            tools=[], 
             model=model_to_use,
             name="urgency_detector_agent",
             description="Agent that analyzes a customer request to determine if it is urgent using the 'analyze_request_urgency' tool, then provides 'urgent' or 'normal' via final_answer."
