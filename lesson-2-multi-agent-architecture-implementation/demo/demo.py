@@ -1,15 +1,15 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv,find_dotenv
 from smolagents import ToolCallingAgent, OpenAIServerModel, tool
 from typing import Dict, Any, List, Optional
 import json
 import random
 
-load_dotenv()
+load_dotenv(find_dotenv(), override=True)
 
 model = OpenAIServerModel(
     model_id="gpt-4o-mini",
-    api_key=os.getenv("UDACITY_OPENAI_API_KEY"),
+    api_key=os.getenv("OPENAI_API_KEY"),
     api_base="https://openai.vocareum.com/v1",
 )
 

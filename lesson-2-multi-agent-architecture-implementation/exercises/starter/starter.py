@@ -1,12 +1,12 @@
 import os
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 from smolagents import ToolCallingAgent, OpenAIServerModel, tool
 from typing import Dict, Any, List, Optional
 import json
 import random
 
 
-load_dotenv()
+load_dotenv(find_dotenv(), override=True)
 
 model = OpenAIServerModel(
     model_id="gpt-4o-mini",
@@ -71,10 +71,14 @@ def find_food(method: str) -> int:
     # - If method is "fishing" (case-insensitive), return a random amount between 2-7
     # - Return 0 for any other method
     
-    food_found = 0
-    
-    # YOUR CODE HERE
-    
+
+    if method.lower() == 'foraging':
+        food_found = random.randint(0,3)
+    elif method.lower() == 'fishing':
+        food_found = random.randint(2,7)
+    else:
+        food_found = 0
+
     return food_found
 
 
@@ -198,19 +202,19 @@ class PenguinAgent(ToolCallingAgent):
         prompt = f"""
         You are {self.name}. Your current state is: Food: {self.food}, Has Toy: {self.has_toy}.
         
-        # TODO: Complete this prompt to guide the penguin's decision-making
-        # Your prompt should:
-        # - Explain the three action options available
-        # - Guide when to use 'find_food' tool (with required 'method' parameter)
-        # - Guide when to request resources from the scientist via text
-        # - Encourage smart decision-making based on current state
-        
-        Choose ONE action:
-        1. FIND FOOD YOURSELF: Use 'find_food' tool with method="fishing" or method="foraging"
-        2. REQUEST FOOD: Respond with text asking for food
-        3. REQUEST TOY: Respond with text asking for a toy
-        
-        YOUR ADDITIONAL GUIDANCE HERE
+        You have on of three possible actions:
+        1. FIND FOOD YOURSELF using the 'find_food' tool with method="fishing" or method="foraging". Only one method can be chosen per action.
+        2. REQUEST FOOD from the scientist by responding with text asking for food.
+        3. REQUEST TOY from the scientist by responding with text asking for a toy.
+
+        Consider your current state:
+        - If you have little food, prioritize finding food yourself or requesting food.
+        - If you don't have a toy, consider requesting a toy from the scientist.
+        - Use the 'find_food' tool wisely to maximize your food gain.
+        Make your decision based on your current needs and available actions.
+
+        You can only choose one of the three possible actions per turn.
+
         """
         
         final_llm_text_output = self.run(prompt)
@@ -276,7 +280,7 @@ class PenguinAgent(ToolCallingAgent):
         return action_result
 
 
-def run_simulation(num_rounds=2, num_penguins=2):
+def run_simulation(num_rounds=3, num_penguins=3):
     penguin_names = ['Skipper', 'Kowalski', 'Rico', 'Private']
     scientist = ScientistAgent(initial_food_supply=15, refresh_interval=3)
     penguins = [PenguinAgent(f"{random.choice(penguin_names)}{i+1}") for i in range(num_penguins)]
