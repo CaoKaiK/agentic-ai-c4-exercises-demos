@@ -30,6 +30,16 @@ def create_diagram(title, nodes, edges, node_labels=None, node_types=None, edge_
     pos["Arrernte Language Specialist"] = (2*horizontal_spacing, vertical_spacing)
     pos["Pitjantjatjara Language Specialist"] = (2*horizontal_spacing, -vertical_spacing)
     pos["Knowledge Base Lookup"] = (3*horizontal_spacing, 0)
+
+        # Define positions for extended nodes in a balanced layout
+    if "Translation Verification Agent" in nodes:
+        pos["Translation Verification Agent"] = (3*horizontal_spacing, 3*vertical_spacing)
+    if "Cultural Sensitivity Checker" in nodes:
+        pos["Cultural Sensitivity Checker"] = (6*horizontal_spacing, 3*vertical_spacing)
+    if "Multimodal Media Tool" in nodes:
+        pos["Multimodal Media Tool"] = (7*horizontal_spacing, -2*vertical_spacing)
+    if "Feedback Collector" in nodes:
+        pos["Feedback Collector"] = (0, -2.5*vertical_spacing)
     
     node_colors = []
     node_shapes = []
@@ -156,7 +166,10 @@ def extended_uluru_exercise():
         "Arrernte Language Specialist",
         "Pitjantjatjara Language Specialist",
         "Knowledge Base Lookup",
-        # TODO: Add your new nodes here
+        "Translation Verification Agent",
+        "Multimodal Media Tool",
+        "Feedback Collector",
+        "Cultural Sensitivity Checker"
     ]
     
     edges = [
@@ -170,7 +183,21 @@ def extended_uluru_exercise():
         ("Arrernte Language Specialist", "Language Identification"),
         ("Pitjantjatjara Language Specialist", "Language Identification"),
         ("Language Identification", "Visitor Input"),
-        # TODO: Add your new edges here
+
+        # New edges
+        ("Arrernte Language Specialist", "Translation Verification Agent"),
+        ("Pitjantjatjara Language Specialist", "Translation Verification Agent"),
+        ("Translation Verification Agent", "Language Identification"),
+
+        ("Knowledge Base Lookup", "Multimodal Media Tool"),
+        ("Multimodal Media Tool", "Arrernte Language Specialist"),
+        ("Multimodal Media Tool", "Pitjantjatjara Language Specialist"),
+
+        ("Knowledge Base Lookup", "Cultural Sensitivity Checker"),
+        ("Cultural Sensitivity Checker", "Arrernte Language Specialist"),
+        ("Cultural Sensitivity Checker", "Pitjantjatjara Language Specialist"),
+
+        ("Visitor Input", "Feedback Collector")
     ]
     
     node_types = {
@@ -179,12 +206,17 @@ def extended_uluru_exercise():
         "Arrernte Language Specialist": "agent",
         "Pitjantjatjara Language Specialist": "agent",
         "Knowledge Base Lookup": "tool",
-        # TODO: Add types for your new nodes here
+        "Translation Verification Agent": "agent",
+        "Multimodal Media Tool": "tool",
+        "Feedback Collector": "tool",
+        "Cultural Sensitivity Checker": "tool"
     }
 
     edge_labels = {
         ("Language Identification", "Visitor Input"): "Formatted Response",
-        # TODO: Add new edge labels here
+        ("Arrernte Language Specialist", "Translation Verification Agent"): "Translation Request",
+        ("Pitjantjatjara Language Specialist", "Translation Verification Agent"): "Translation Request",
+        ("Visitor Input", "Feedback Collector"): "Feedback"
     }
 
     create_diagram(
