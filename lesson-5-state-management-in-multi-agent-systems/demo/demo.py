@@ -1,6 +1,6 @@
 from typing import Dict, List, Any
 import os
-import dotenv
+from dotenv import load_dotenv, find_dotenv
 import time
 
 from smolagents import (
@@ -9,8 +9,8 @@ from smolagents import (
     tool,
 )
 
-dotenv.load_dotenv(dotenv_path="../.env")
-openai_api_key = os.getenv("UDACITY_OPENAI_API_KEY")
+load_dotenv(find_dotenv(), override=True)
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 model = OpenAIServerModel(
     model_id="gpt-4o-mini",

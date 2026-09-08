@@ -87,7 +87,7 @@ Output will include:
 Make sure to submit the following files:
 
 1. Your completed `template.py` or `project_starter.py` with all agent logic
-2. A **workflow diagram** describing your agent architecture and data flow
+2. A **workflow diagram** describing your agent architecture and data flow: [workflow_diagram.md](workflow_diagram.md)
 3. A `README.txt` or `design_notes.txt` explaining how your system works
 4. Outputs from your test run (like `test_results.csv`)
 
