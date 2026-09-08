@@ -15,7 +15,7 @@ mlflow.set_experiment("munder-difflin")
 
 # Enable the MLflow integration before importing and using smolagents.
 mlflow.smolagents.autolog()
-from smolagents import OpenAIServerModel, ToolCallingAgent, WebSearchTool
+from smolagents import OpenAIServerModel, ToolCallingAgent, tool
 
 # Load environment configuration before resolving the tracking URI.
 load_dotenv(find_dotenv(), override=True)
@@ -27,6 +27,10 @@ model = OpenAIServerModel(
     api_base="https://openai.vocareum.com/v1",
     api_key=openai_api_key,
 )
+
+@tool
+def 
+
 
 class InventoryAgent(ToolCallingAgent):
     """Agent responsible for managing inventory-related tasks."""
@@ -72,7 +76,7 @@ class OrchestrationAgent(ToolCallingAgent):
 def run():
     orchestration_agent = OrchestrationAgent(model)
 
-    orchestration_agent.process_order("I need some paper")
+    orchestration_agent.process_order("Do you have paper in stock?")
 
 
 
