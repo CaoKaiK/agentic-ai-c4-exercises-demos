@@ -4,6 +4,8 @@ import time
 import pandas as pd
 from dotenv import find_dotenv, load_dotenv
 
+from smolagents import ToolCallingAgent, OpenAIServerModel, tool
+
 from database.init_db import db_engine, init_database
 from utils.utils import (
     create_transaction,
@@ -15,18 +17,15 @@ from utils.utils import (
     search_quote_history,
 )
 
-
-########################
-########################
-########################
-# YOUR MULTI AGENT STARTS HERE
-########################
-########################
-########################
-
-
 # Set up and load your env parameters and instantiate your model.
+load_dotenv(find_dotenv(), override=True)
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
+model = OpenAIServerModel(
+    model_id="gpt-4.1-mini",
+    api_base="https://openai.vocareum.com/v1",
+    api_key=openai_api_key,
+)
 
 """Set up tools for your agents to use, these should be methods that combine the database functions above
  and apply criteria to them to ensure that the flow of the system is correct."""
