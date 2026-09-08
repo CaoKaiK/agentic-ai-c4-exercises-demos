@@ -3,13 +3,21 @@ from dotenv import find_dotenv, load_dotenv
 import pandas as pd
 
 import mlflow
-from smolagents import  OpenAIServerModel, ToolCallingAgent, WebSearchTool
+from mlflow.entities import SpanType
 from database.init_db import init_database
 
-# mlflow
-mlflow.smolagents.autolog()
+load_dotenv(find_dotenv(), override=True)
+openai_api_key = os.getenv("OPENAI_API_KEY")
+tracking_uri = os.getenv("MLFLOW_TRACKING_URI", "http://127.0.0.1:5000")
 
-# Set up and load your env parameters and instantiate your model.
+mlflow.set_tracking_uri(tracking_uri)
+mlflow.set_experiment("munder-difflin")
+
+# Enable the MLflow integration before importing and using smolagents.
+mlflow.smolagents.autolog()
+from smolagents import OpenAIServerModel, ToolCallingAgent, WebSearchTool
+
+# Load environment configuration before resolving the tracking URI.
 load_dotenv(find_dotenv(), override=True)
 openai_api_key = os.getenv("OPENAI_API_KEY")
 
@@ -28,7 +36,7 @@ class InventoryAgent(ToolCallingAgent):
             tools=[WebSearchTool()],
             model=model,
             name="InventoryAgent",
-            description="Agent responsible for managing inventory-related tasks."
+            description="Agent responsible for managing inventory-related tasks. You can search the web"
         )
 
 class OrchestrationAgent(ToolCallingAgent):
@@ -52,6 +60,7 @@ class OrchestrationAgent(ToolCallingAgent):
             """,
         )
 
+    @mlflow.trace(name="process_order", span_type=SpanType.AGENT)
     def process_order(self, request):
         """Process an incoming order by delegating tasks to the appropriate sub-agents."""
 
