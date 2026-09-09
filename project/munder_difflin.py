@@ -257,10 +257,9 @@ class TransactionAgent(ToolCallingAgent):
             2   Transact the order for the item. Use "sales" as the transaction_type.
             3.  Check that you have identified all necessary transactions before completing the process.
 
-            Check that all transactions have been identified and created before completing the process.
-            e.g. 
-            - If an item is not in stock sufficiently, create a "stock_orders" transaction for the resupply.
-            - After the resupply, create a "sales" transaction for the customer's order.
+            Sometimes only one "sales" transaction is needed without a preceding "stock_orders" transaction. There is never the need for two "stock_orders" transactions or two "sales" transactions.
+
+
             """,
         )
 
@@ -279,10 +278,10 @@ def validate_list(order_list: list) -> bool:
     for item in order_list:
         if not required_keys.issubset(item.keys()):
             return False
-        try:
-            get_item_price(item["item_name"])
-        except ValueError:
-            return False
+        # try:
+        #     get_item_price(item["item_name"])
+        # except ValueError:
+        #     return False
 
     return True
 
@@ -300,18 +299,25 @@ class OrderDecompositionAgent(ToolCallingAgent):
             """,
             instructions="""
             You will receive a customer order as input. Extract all important details for each item in the order: 
-                - item_name
+                - customer_item_name
                 - quantity
                 - request_date
-                - fulfillment_date.
+                - fulfillment_date
 
             Steps:
             1. Get the inventory list with the get_inventory_list tool.
-            2. Create a list of dicts that contains all necessary details for each item in the order.
-            3. use the exact keys: "item_name", "quantity", "request_date", and "fulfillment_date" for each item in the list.
+            2. Try to match the customer_item_name with the items in the inventory list. Also allow for close matches or alternative names.
+            3. If a match is found, use the corresponding item_name from the inventory list. Forget the customer_item_name. If no match is found set "offered" to False.
+            3. Use the following keys for the dict:
+                - "item_name"
+                - "offered"
+                - "quantity"
+                - "request_date"
+                - "fulfillment_date"
             4. Validate the list using the validate_list tool before proceeding.
 
-            Send only the validated list of item details as JSON. Nothing else. Return raw json only, no markdown, no explanation.
+            Always send only the validated list of item details as JSON. Nothing else. Return raw json only, no markdown, no explanation.
+
             """,
         )
 
@@ -402,25 +408,26 @@ class OrchestrationAgent(ToolCallingAgent):
 
     def process_order(self, request):
         decomposed_order = self.order_decomposition_agent.run(
-            f"Decompose this order: {request} - Always follow your instructions."
+            f"Decompose this order: {request} - Always follow your instructions. Only respond with JSON."
         )
         print(decomposed_order)
-        order_list = json.loads(decomposed_order)
+        order_list = json.loads(decomposed_order) if isinstance(decomposed_order, str) else decomposed_order
 
         results = []
         for item in order_list:
+            if item['offered']:
+                result = self.run(
+                    f"Customer order: {item}. Always follow your instructions."
+                )
+                results.append(result)
 
-            result = self.run(
-                f"Customer order: {item}. Always follow your instructions."
-            )
-            results.append(result)
-
-        role = "You are a final summary agent responsible for evaluating the individual item processing and providing the customer with a comprehensive final feedback."
+        
         content = f"""
         The customer had the following request: {request}
 
         Your orchestration agent has processed the individual items as follows: {results}
         Please provide a very short final feedback for the customer based on these results. Provide the sum of all orders as total price.
+        If any item was not offered, mention it explicitly in the final feedback.
         """
 
         response = model.generate([{"role": "user", "content": content}])
@@ -465,7 +472,7 @@ def run():
     )
     sample["request_date"] = pd.to_datetime(sample["request_date"], format="%d.%m.%Y")
 
-    for idx, row in sample.iterrows():  # quote_requests_sample
+    for idx, row in quote_requests_sample.iterrows():  # sample
         request_date = row["request_date"].strftime("%Y-%m-%d")
         DAY = request_date
 
