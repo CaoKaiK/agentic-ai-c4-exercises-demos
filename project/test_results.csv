@@ -1,0 +1,2 @@
+request_id,request_date,cash_balance,inventory_value,response
+1,2025-04-01,45062.2,4940.299999999999,"The order for 500 pages of A4 paper by 20.04.2025 has been processed. There are currently 272 units in stock, and an additional 363 units will be resupplied by 2025-03-05 to meet the requirement. The total cost for 500 pages is $25. The transaction has been successfully completed."

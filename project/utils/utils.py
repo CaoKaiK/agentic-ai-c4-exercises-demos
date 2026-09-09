@@ -1,9 +1,17 @@
+import sys
+from pathlib import Path
+
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Union
 from sqlalchemy.sql import text
 
-from database.init_db import db_engine
+# Add the project root when this module is executed as a script.
+PROJECT_DIR = Path(__file__).resolve().parent.parent
+if str(PROJECT_DIR) not in sys.path:
+    sys.path.insert(0, str(PROJECT_DIR))
+
+from database.init_db import db_engine, init_database
 
 
 def create_transaction(
@@ -53,6 +61,19 @@ def get_all_inventory(as_of_date: str) -> Dict[str, int]:
     result = pd.read_sql(query, db_engine, params={"as_of_date": as_of_date})
     return dict(zip(result["item_name"], result["stock"]))
 
+def get_item_price(item_name: str) -> float:
+    """Retrieve the price of an item from the inventory."""
+    query = """
+        SELECT unit_price
+        FROM inventory
+        WHERE item_name = :item_name
+        LIMIT 1
+    """
+    result = pd.read_sql(query, db_engine, params={"item_name": item_name})
+    if result.empty:
+        raise ValueError(f"Item not found in inventory: {item_name}")
+    return float(result.iloc[0]["unit_price"])
+  
 
 def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.DataFrame:
     """Retrieve the stock level of an item as of a given date."""
@@ -67,6 +88,10 @@ def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.Data
                 WHEN transaction_type = 'sales' THEN -units
                 ELSE 0
             END), 0) AS current_stock
+            , (SELECT min_stock_level
+               FROM inventory
+               WHERE inventory.item_name = :item_name
+               LIMIT 1) AS min_stock_level
         FROM transactions
         WHERE item_name = :item_name
         AND transaction_date <= :as_of_date
@@ -75,7 +100,7 @@ def get_stock_level(item_name: str, as_of_date: Union[str, datetime]) -> pd.Data
         stock_query,
         db_engine,
         params={"item_name": item_name, "as_of_date": as_of_date},
-    )
+    ).iloc[0].to_dict()
 
 
 def get_supplier_delivery_date(input_date_str: str, quantity: int) -> str:
@@ -132,7 +157,7 @@ def generate_financial_report(as_of_date: Union[str, datetime]) -> Dict:
 
     for _, item in inventory_df.iterrows():
         stock_info = get_stock_level(item["item_name"], as_of_date)
-        stock = stock_info["current_stock"].iloc[0]
+        stock = stock_info["current_stock"]
         item_value = stock * item["unit_price"]
         inventory_value += item_value
         inventory_summary.append({
@@ -192,3 +217,22 @@ def search_quote_history(search_terms: List[str], limit: int = 5) -> List[Dict]:
     with db_engine.connect() as connection:
         result = connection.execute(text(query), params)
         return [dict(row._mapping) for row in result]
+
+
+if __name__ == "__main__":
+    init_database()
+    print("-" * 40)
+    print(get_all_inventory("2026-08-09"))
+    print("-" * 40)
+    print(get_stock_level("A4 paper", "2026-08-09"))
+    print("-" * 40)
+    print(get_item_price("A4 paper", "sales"))
+    print(get_item_price("A4 paper", "stock_orders"))
+    print("-" * 40)
+    print(get_supplier_delivery_date("2026-08-09", 1001))
+    print("-" * 40)
+    print(get_cash_balance("2026-08-09"))
+    print("-" * 40)
+    print(generate_financial_report("2026-08-09"))
+    print("-" * 40)
+    print(search_quote_history(["A4 paper"], limit=5))

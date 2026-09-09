@@ -1,10 +1,24 @@
 import os
+import time
 from dotenv import find_dotenv, load_dotenv
+from datetime import datetime, timedelta
+from typing import Dict, List, Union
 import pandas as pd
 
 import mlflow
 from mlflow.entities import SpanType
 from database.init_db import init_database
+
+from utils.utils import (
+    create_transaction,
+    get_all_inventory,
+    get_item_price,
+    get_stock_level,
+    get_supplier_delivery_date,
+    get_cash_balance,
+    generate_financial_report,
+    search_quote_history,
+)
 
 load_dotenv(find_dotenv(), override=True)
 openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -28,8 +42,64 @@ model = OpenAIServerModel(
     api_key=openai_api_key,
 )
 
+DAY = "2025-03-01"
+
+
 @tool
-def 
+# @mlflow.trace(name="get_inventory_list", span_type=SpanType.TOOL)
+def get_inventory_list(date: str) -> list:
+    """Get the list of all inventory items available on a specific date.
+    Args:
+        date (str): The date for which to retrieve the inventory list. Must be in format YYYY-MM-DD
+
+    Returns:
+        list: A list of dictionaries containing item names and their stock levels.
+    """
+    inventory = get_all_inventory(date)
+    return [
+        {"item": item_name, "stock": int(stock)}
+        for item_name, stock in inventory.items()
+    ]
+
+
+@tool
+# @mlflow.trace(name="check_inventory", span_type=SpanType.TOOL)
+def check_inventory(item: str, quantity: int, date: str) -> dict:
+    """Check if the specified item is available in the inventory.
+    Args:
+        item (str): The name of the item to check in the inventory.
+        quantity (int): The quantity of the item to check in the inventory.
+        date (str): The date for which to check the inventory availability. Must be in format YYYY-MM-DD
+
+    Returns:
+        dict: A dictionary containing the item, stock level, resupply amount, and the date of the check.
+    """
+
+    stock_info = get_stock_level(item, date)
+    stock = stock_info["current_stock"]
+    min_stock_level = stock_info["min_stock_level"]
+
+    if quantity - stock <= min_stock_level:
+        return {"item": item, "stock": stock, "resupply": 0, "date": date}
+    else:
+        # If the requested quantity exceeds the available stock beyond the minimum stock level, resupply is needed.
+        resupply_amount = min_stock_level + quantity - stock
+        return {"item": item, "stock": stock, "resupply": resupply_amount}
+
+
+@tool
+# @mlflow.trace(name="get_delivery_date", span_type=SpanType.TOOL)
+def get_delivery_date(date: str, quantity: int) -> str:
+    """Get the estimated delivery date for a specific order.
+    Args:
+        date (str): The date when the order is placed. Must be in format YYYY-MM-DD
+        quantity (int): The quantity of items in the order.
+
+    Returns:
+        str: The estimated delivery date in format YYYY-MM-DD.
+    """
+    date = get_supplier_delivery_date(DAY, quantity)
+    return date
 
 
 class InventoryAgent(ToolCallingAgent):
@@ -37,11 +107,208 @@ class InventoryAgent(ToolCallingAgent):
 
     def __init__(self, model):
         super().__init__(
-            tools=[WebSearchTool()],
+            tools=[get_inventory_list, check_inventory, get_delivery_date],
             model=model,
             name="InventoryAgent",
-            description="Agent responsible for managing inventory-related tasks. You can search the web"
+            description="""
+            You are an inventory management agent responsible for checking stock levels and availability of items in the inventory.
+            
+            You will receive requests containing the item name, quantity, and the date for which to check the inventory availability.
+            """,
+            instructions="""
+            You will receive requests containing the item name, quantity, and the date for which to check the inventory availability. Forget any previous requests and focus only on the current one.
+            Make sure to match the name of the requested item exactly with the name in the inventory list.
+
+            1. Always call get_inventory_list for the specified date using the get_inventory_list tool.
+            2. Always match the requested item name with the items in the inventory list.
+            3. Always use the check_inventory tool to verify the stock level and availability.
+            4. Always check the estimated delivery date using the get_delivery_date tool if resupply is needed.
+            5. Compare the estimated delivery date with the customer's expected delivery date and decide if the order can be fulfilled on time.
+
+            Make sure the item names in your response match exactly with the names in the inventory list. Always provide the following information in your response:
+            - Item name
+            - Requested quantity
+            - Available stock
+            - Resupply amount (if any)
+            - Estimated delivery date (if resupply is needed)
+
+            """,
         )
+
+
+@tool
+def get_item_price_tool(item_name: str) -> float:
+    """
+    Retrieve the price of a specific item using the get_item_price function.
+
+    Args:
+        item_name (str): The name of the item to retrieve the price for.
+
+    Returns:
+        float: The price of the specified item.
+    """
+    return get_item_price(item_name)
+
+
+@tool
+def search_quote_history_tool(item_name: str) -> list:
+    """
+    Search the quote history for a specific item using the search_quote_history function.
+
+    Args:
+        item_name (str): The name of the item to search for in the quote history.
+
+    Returns:
+        list: A list of quotes related to the specified item.
+    """
+    return search_quote_history(item_name)
+
+
+class QuotationAgent(ToolCallingAgent):
+    """Agent responsible for generating quotations for customer orders."""
+
+    def __init__(self, model):
+        super().__init__(
+            tools=[get_item_price_tool, search_quote_history_tool],
+            model=model,
+            name="QuotationAgent",
+            description="""
+            You are a quotation agent responsible for generating price quotations for customer orders.
+            """,
+            instructions="""
+            You will receive requests containing the item name, quantity, and the date for which to generate a quotation. Forget any previous requests and focus only on the current one.
+            Always provide the total price based on the quantity and any applicable discounts.
+
+            
+            1. Use the get_item_price_tool to retrieve the price for the item
+            2. Use the search_quote_history_tool to check for previous quotes for the item.
+            3. If the price is above 1000$ apply 10 per cent discount and always round down to the nearest 5$
+            4. Return the total price to the requester and explain the discount method.
+
+            """,
+        )
+
+
+@tool
+def create_transaction_tool(
+    item_name: str,
+    transaction_type: str,
+    quantity: int,
+    price: float,
+    date: Union[str, datetime],
+) -> dict:
+    """
+    Create a transaction for a specific item using the create_transaction function.
+
+    Args:
+        item_name (str): The name of the item for the transaction.
+        transaction_type (str): The type of transaction (must be 'stock_orders' or 'sales').
+        quantity (int): The quantity of the item involved in the transaction.
+        price (float): The price per unit of the item.
+        date (Union[str, datetime]): The date of the transaction.
+    Returns:
+        int: The ID of the created transaction.
+    """
+    if transaction_type in ["sale", "sales", "selling"]:
+        transaction_type = "sales"
+    if transaction_type in ["stock_order", "stock_orders", "restock"]:
+        transaction_type = "stock_orders"
+    balance = get_cash_balance(DAY)
+    if transaction_type == "stock_orders":
+        if balance < price:
+            raise ValueError("Insufficient balance for stock order.")
+        else:
+            price *= 0.9
+            transaction_id = create_transaction(
+                item_name, transaction_type, quantity, price, DAY
+            )
+
+    else:
+        transaction_id = create_transaction(
+            item_name, transaction_type, quantity, price, DAY
+        )
+    return transaction_id
+
+
+class TransactionAgent(ToolCallingAgent):
+    """Agent responsible for handling transactions related to customer orders."""
+
+    def __init__(self, model):
+        super().__init__(
+            tools=[create_transaction_tool],
+            model=model,
+            name="TransactionAgent",
+            description="""
+            You are a transaction agent responsible for handling financial transactions for customer orders.
+            """,
+            instructions="""
+            You will receive an inventory check and quotation as input. Extract all important details from them to create the ALL the necessary transactions. Use the total price as price not the unit_price.
+
+            1.  Always check first if an items needs to be resupplied call the create_transaction_tool to create a stock_orders transaction. User "stock_orders" as the transaction_type.
+            2   After all resupplies are completed, transact the orders for the items. Use "sales" as the transaction_type.
+            3.  Check that you have identified all necessary transactions before completing the process.
+
+            Check that all transactions have been identified and created before completing the process.
+            e.g. 
+            - If an item is not in stock sufficiently, create a "stock_orders" transaction for the resupply.
+            - After the resupply, create a "sales" transaction for the customer's order.
+
+            Do this for all items in the customer's order. Make no mistakes and ensure all necessary transactions are created.
+
+            """,
+        )
+
+
+@tool
+def validate_list(order_list: list) -> bool:
+    """Validate that the order list contains all necessary details for each item.
+
+    Args:
+        order_list (list): The list of items in the order.
+
+    Returns:
+        bool: True if all items have the required details, False otherwise.
+    """
+    required_keys = {"item_name", "quantity", "request_date", "fulfillment_date"}
+    for item in order_list:
+        if not required_keys.issubset(item.keys()):
+            return False
+        try:
+            get_item_price(item["item_name"])
+        except ValueError:
+            return False
+
+    return True
+
+
+class OrderDecompositionAgent(ToolCallingAgent):
+    """Agent responsible for decomposing customer orders into individual items and their details."""
+
+    def __init__(self, model):
+        super().__init__(
+            tools=[get_inventory_list, validate_list],
+            model=model,
+            name="OrderDecompositionAgent",
+            description="""
+            You are an order decomposition agent responsible for breaking down customer orders into individual items and their details.
+            """,
+            instructions="""
+            You will receive a customer order as input. Extract all important details for each item in the order: 
+                - item_name
+                - quantity
+                - request_date
+                - fulfillment_date.
+
+            Steps:
+            1. Get the inventory list with the get_inventory_list tool.
+            2. Create a list of dicts that contains all necessary details for each item in the order.
+            3. use the exact keys: "item_name", "quantity", "request_date", and "fulfillment_date" for each item in the list.
+            4. Validate the list using the validate_list tool before proceeding.
+
+            Send only the validated list of item details as the output. Nothing else.
+            """,
+        )
+
 
 class OrchestrationAgent(ToolCallingAgent):
     """Orchestration agent that manages multiple sub-agents and coordinates their actions."""
@@ -49,36 +316,199 @@ class OrchestrationAgent(ToolCallingAgent):
     def __init__(self, model):
         self.model = model
 
+        self.order_decomposition_agent = OrderDecompositionAgent(model)
         self.inventory_agent = InventoryAgent(model)
+        self.quotation_agent = QuotationAgent(model)
+        self.transaction_agent = TransactionAgent(model)
+
+        @tool
+        def call_order_decomposition_agent(request: str) -> list[dict]:
+            """Call the OrderDecompositionAgent to decompose a customer order into individual items and their details.
+            Args:
+                request (str): The customer order as a string.
+
+            Returns:
+                str: The response from the OrderDecompositionAgent.
+            """
+            return self.order_decomposition_agent.run(
+                f"Decompose this order: {request} - Always follow your instructions."
+            )
+
+        @tool
+        # @mlflow.trace(name="call_inventory_agent", span_type=SpanType.TOOL)
+        def call_inventory_agent(request: str) -> str:
+            """Call the InventoryAgent to check the inventory for a specific item.
+            Args:
+                request (str): The request containing item name, quantity, and date.
+
+            Returns:
+                str: The response from the InventoryAgent.
+            """
+            return self.inventory_agent.run(
+                f"Check inventory for this item: {request} - Always follow your instructions."
+            )
+
+        @tool
+        def call_quotation_agent(request: str) -> str:
+            """Call the QuotationAgent to generate a quotation for a specific item.
+            Args:
+                request (str): The request containing item name, quantity, and date.
+
+            Returns:
+                str: The response from the QuotationAgent.
+            """
+            return self.quotation_agent.run(
+                f"Generate quotation for this item: {request} - Always follow your instructions."
+            )
+
+        @tool
+        def call_transaction_agent(request: str) -> str:
+            """Call the TransactionAgent to create a transaction for a specific item.
+            Args:
+                request (str): The request containing item name, quantity, and total price.
+
+            Returns:
+                str: The response from the TransactionAgent.
+            """
+            return self.transaction_agent.run(
+                f"Create transactions for this order: {request} - Always follow your instructions."
+            )
 
         super().__init__(
-            tools=[],
+            tools=[call_inventory_agent, call_quotation_agent, call_transaction_agent],
             model=model,
             name="OrchestrationAgent",
+            max_tool_threads=1,
             description="""
-            You are the orchestration agent for a paper supply company, 
-            coordinating the actions of specialized sub-agents to fulfill orders efficiently.
+            You are the orchestration agent for a paper supply company, coordinating the actions of specialized sub-agents to fulfill orders efficiently.
 
-            You have access to an inventory agent that can help you.
+            You report to an agent responsible for overseeing the overall order fulfillment process. He will provide you with individual customer orders and expect you to coordinate the sub-agents to fulfill them efficiently.
+            """,
+            instructions="""
 
+            You have the following agents at your disposal:
+            - InventoryAgent: Responsible for managing inventory-related tasks.
+            - QuotationAgent: Responsible for generating quotations for requested items.
+            - TransactionAgent: Responsible for creating transactions based on inventory and quotation results.
+
+            Process orders by:
+            1. Check the inventory for the item using call_inventory_agent.
+            2. Get a quotation for the item using call_quotation_agent. Always use the exact name that is returned from the inventory check.
+            3. Forward both the inventory check result and the quotation to the call_transaction_agent
+            4. Summarize the inventory, quotation and transaction results and inform the customer of the outcome.
+
+            Reply with the final summary.
             """,
         )
 
-    @mlflow.trace(name="process_order", span_type=SpanType.AGENT)
     def process_order(self, request):
-        """Process an incoming order by delegating tasks to the appropriate sub-agents."""
+        decomposed_order = self.call_order_decomposition_agent(request)
 
+        results = []
+        for item in decomposed_order:
 
-        result = self.run(request)
-        return result
+            result = self.run(
+                f"Customer order: {request}. Always follow your instructions."
+            )
+            result.append(result)
+
+        role = "You are a final summary agent responsible for evaluating the individual item processing and providing the customer with a comprehensive final feedback."
+        content = f"""
+        The customer had the following request: {request}
+
+        Your orchestration agent has processed the individual items as follows: {results}
+        Please provide a comprehensive final feedback for the customer based on these results.
+        """
+
+        response = model.generate(role=role, content=content)
+
+        return response
 
 
 def run():
+    print("Initializing Database...")
+    init_database()
+    try:
+        quote_requests_sample = pd.read_csv("quote_requests_sample.csv")
+        quote_requests_sample["request_date"] = pd.to_datetime(
+            quote_requests_sample["request_date"], format="%m/%d/%y", errors="coerce"
+        )
+        quote_requests_sample.dropna(subset=["request_date"], inplace=True)
+        quote_requests_sample = quote_requests_sample.sort_values("request_date")
+    except Exception as error:
+        print(f"FATAL: Error loading test data: {error}")
+        return
+
+    # Get initial state
+    initial_date = quote_requests_sample["request_date"].min().strftime("%Y-%m-%d")
+    report = generate_financial_report(initial_date)
+    current_cash = report["cash_balance"]
+    current_inventory = report["inventory_value"]
+
     orchestration_agent = OrchestrationAgent(model)
 
-    orchestration_agent.process_order("Do you have paper in stock?")
+    results = []
 
+    sample = pd.DataFrame(
+        [
+            {
+                "job": "teacher",
+                "need_size": "small",
+                "event": "reception",
+                "request": "I need 400 papers in A4 and 50 photo paper by April 10, 2025",
+                "request_date": "01.04.2025",
+            }
+        ]
+    )
+    sample["request_date"] = pd.to_datetime(sample["request_date"], format="%d.%m.%Y")
 
+    for idx, row in sample.iterrows():  # quote_requests_sample
+        request_date = row["request_date"].strftime("%Y-%m-%d")
+        DAY = request_date
+
+        print(f"\n=== Request {idx+1} ===")
+        print(f"Context: {row['job']} organizing {row['event']}")
+        print(f"Request Date: {request_date}")
+        print(f"Cash Balance: ${current_cash:.2f}")
+        print(f"Inventory Value: ${current_inventory:.2f}")
+
+        # Process request
+        request_with_date = f"{row['request']} (Date of request: {request_date})"
+
+        response = orchestration_agent.process_order(
+            "I want to order 500 pages of A4 paper by 20.04.2025"
+        )
+        # Update state
+        report = generate_financial_report(request_date)
+        current_cash = report["cash_balance"]
+        current_inventory = report["inventory_value"]
+
+        print(f"Response: {response}")
+        print(f"Updated Cash: ${current_cash:.2f}")
+        print(f"Updated Inventory: ${current_inventory:.2f}")
+
+        results.append(
+            {
+                "request_id": idx + 1,
+                "request_date": request_date,
+                "cash_balance": current_cash,
+                "inventory_value": current_inventory,
+                "response": response,
+            }
+        )
+
+        time.sleep(1)
+
+    # Final report
+    final_date = quote_requests_sample["request_date"].max().strftime("%Y-%m-%d")
+    final_report = generate_financial_report(final_date)
+    print("\n===== FINAL FINANCIAL REPORT =====")
+    print(f"Final Cash: ${final_report['cash_balance']:.2f}")
+    print(f"Final Inventory: ${final_report['inventory_value']:.2f}")
+
+    # Save results
+    pd.DataFrame(results).to_csv("test_results.csv", index=False)
+    return results
 
 
 if __name__ == "__main__":

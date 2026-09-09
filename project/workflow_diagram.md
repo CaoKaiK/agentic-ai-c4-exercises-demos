@@ -1,67 +1,65 @@
 # Munder Difflin Multi-Agent Workflow
 
-This design uses four agents:
+This design uses four `smolagents` `ToolCallingAgent`s, implemented in `munder_difflin.py`:
 
-- **Orchestrator agent:** owns the customer conversation, extracts the requested items and dates, delegates work, validates worker results, and returns one text response. It does not make inventory, pricing, or transaction decisions itself.
-- **Inventory agent:** determines stock availability and identifies replenishment needs. It does not calculate customer prices or finalize sales.
-- **Quote agent:** uses the request and quote history to calculate a quote, including a bulk discount and an explanation. It does not reserve stock or write transactions.
-- **Fulfillment agent:** checks whether the quoted order can be delivered and records the sale and any required stock order. It is the only worker that changes transaction state.
+- **OrchestrationAgent:** owns the customer conversation, breaks the order into items, delegates each item to the three worker agents in sequence, and reports the outcome. It calls workers directly (`self.inventory_agent.run(...)`, etc.) rather than making inventory, pricing, or transaction decisions itself.
+- **InventoryAgent:** looks up the inventory list, checks stock and resupply needs for one item, and estimates the delivery date. It does not calculate customer prices or write transactions.
+- **QuotationAgent:** looks up the item price and quote history, and calculates the total price including bulk discounts. It does not check stock or write transactions.
+- **TransactionAgent:** records the stock-order and sales transactions for an item once inventory and quotation results are available. It is the only worker that changes transaction state.
 
 ## Architecture and Data Flow
 
 ```mermaid
 graph TD
     A["**Customer**
-    Wants to order products"]
+    Places an order for one or more items"]
 
-    B["**Production**
-    Can resupply stock"]
-    
-    ag1["**Orchestrator**
-    delegates, validates and responds to customer"]
+    ag1["**OrchestrationAgent**
+    splits order into items
+    calls the three workers per item
+    reports the outcome"]
 
-    ag2["**Inventory Agent**
-    Checks the inventory, orders production"]
+    ag2["**InventoryAgent**
+    checks stock and delivery timing"]
 
-    ag3["**Quote Agent**
-    Creates quotation
-    "]
+    ag3["**QuotationAgent**
+    prices the item and applies discounts"]
 
-    ag4["**Fulfillment Agent**
-    Finalizes the order"]
+    ag4["**TransactionAgent**
+    records stock-order and sales transactions"]
 
-    db[(Database)]
+    db[("**SQLite database**
+    inventory, quotes, transactions")]
 
+    A -- "Order request" --> ag1
+    ag1 -- "Final outcome" --> A
 
-    A -- Order request--> ag1
-    A -- Pay invoice --> db
-    ag1 -- Confirm order & invoice --> A
-    ag1 -- Request inventory --> ag2
-    B -- Resupply --> db
-    ag2 -- Confirmation --> ag1
-    ag2 -- Order resupply --> B
-    ag2 -- Check inventory --> db
-    ag1 -- Request quote --> ag3
-    ag3 -- Check price --> db
-    ag3 -- Send quote --> ag1
-    ag1 -- Request fulfillment --> ag4
-    ag4 -- Confirmation --> ag1
-    ag4 -- Check customer for open invoices --> db
+    ag1 -- "call_inventory_agent(item)" --> ag2
+    ag2 -- "stock, resupply, delivery date" --> ag1
+    ag2 -- "get_inventory_list, check_inventory, get_delivery_date" --> db
 
+    ag1 -- "call_quotation_agent(item)" --> ag3
+    ag3 -- "total price + discount explanation" --> ag1
+    ag3 -- "get_item_price_tool, search_quote_history_tool" --> db
+
+    ag1 -- "call_transaction_agent(inventory + quote)" --> ag4
+    ag4 -- "transaction confirmation" --> ag1
+    ag4 -- "create_transaction_tool" --> db
 ```
 
-## Orchestration Sequence
+## Tools
 
+| Agent | Agent tool | Purpose | Underlying helper function(s) |
+| --- | --- | --- | --- |
+| InventoryAgent | `get_inventory_list` | List all items with positive stock on the request date. | `get_all_inventory(as_of_date)` |
+| InventoryAgent | `check_inventory` | Check one item's stock against the requested quantity and compute the resupply amount. | `get_stock_level(item_name, as_of_date)` |
+| InventoryAgent | `get_delivery_date` | Estimate the supplier delivery date for a resupply quantity. | `get_supplier_delivery_date(input_date_str, quantity)` |
+| QuotationAgent | `get_item_price_tool` | Look up the catalogue unit price for an item. | `get_item_price(item_name)` |
+| QuotationAgent | `search_quote_history_tool` | Find comparable historical quotes to justify pricing/discounts. | `search_quote_history(search_terms)` |
+| TransactionAgent | `create_transaction_tool` | Record a `stock_orders` or `sales` transaction, checking cash balance before a resupply purchase. | `create_transaction(item_name, transaction_type, quantity, price, date)` and `get_cash_balance(as_of_date)` |
+| OrchestrationAgent | `call_inventory_agent` | Delegate one item to InventoryAgent and return its result. | Wraps `InventoryAgent.run(...)` |
+| OrchestrationAgent | `call_quotation_agent` | Delegate one item to QuotationAgent and return its result. | Wraps `QuotationAgent.run(...)` |
+| OrchestrationAgent | `call_transaction_agent` | Delegate the combined inventory + quote result to TransactionAgent. | Wraps `TransactionAgent.run(...)` |
+| Reporting (used in `run()`, not an agent tool) | — | Reports cash balance and inventory value before/after each request. | `generate_financial_report(as_of_date)` |
 
-
-## Tool Responsibilities
-
-| Agent tool | Purpose | Starter helper function(s) |
-| --- | --- | --- |
-| `check_inventory` | Check whether the requested products are in stock. | `get_all_inventory(as_of_date)` or `get_stock_level(item_name, as_of_date)` |
-| `order_resupply` | Request replenishment from Production when inventory is insufficient. | `get_supplier_delivery_date(input_date_str, quantity)` and `create_transaction(item_name, "stock_orders", quantity, price, date)` |
-| `check_price` | Look up product prices when preparing a quotation. | `generate_financial_report(as_of_date)` for inventory unit prices |
-| `pay_invoice` | Record the customer payment when the order is confirmed. | `create_transaction(item_name, "sales", quantity, price, date)` |
-| `check_open_invoices` | Check the customer's outstanding invoice status before fulfillment. | No dedicated helper exists in the starter code; this requires customer invoice data to be added to the database. |
-
-All messages passed between agents are text containing the request, exact item names, quantities, dates, and the previous agent's result.
+All messages passed between agents are text containing the request, exact item names, quantities, dates, and the previous agent's result. The orchestrator processes the order **one item at a time**, completing inventory, quotation, and transaction steps for an item before moving to the next.
