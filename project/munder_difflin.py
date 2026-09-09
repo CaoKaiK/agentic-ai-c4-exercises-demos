@@ -1,5 +1,6 @@
 import os
 import time
+import json
 from dotenv import find_dotenv, load_dotenv
 from datetime import datetime, timedelta
 from typing import Dict, List, Union
@@ -79,11 +80,13 @@ def check_inventory(item: str, quantity: int, date: str) -> dict:
     stock = stock_info["current_stock"]
     min_stock_level = stock_info["min_stock_level"]
 
-    if quantity - stock <= min_stock_level:
+
+    if stock - quantity >= min_stock_level:
         return {"item": item, "stock": stock, "resupply": 0, "date": date}
     else:
         # If the requested quantity exceeds the available stock beyond the minimum stock level, resupply is needed.
-        resupply_amount = min_stock_level + quantity - stock
+        resupply_amount = quantity + min_stock_level - stock
+        print(resupply_amount)
         return {"item": item, "stock": stock, "resupply": resupply_amount}
 
 
@@ -113,10 +116,10 @@ class InventoryAgent(ToolCallingAgent):
             description="""
             You are an inventory management agent responsible for checking stock levels and availability of items in the inventory.
             
-            You will receive requests containing the item name, quantity, and the date for which to check the inventory availability.
+            You will receive requests containing the item name, quantity, the date of the request and the expected delivery date.
             """,
             instructions="""
-            You will receive requests containing the item name, quantity, and the date for which to check the inventory availability. Forget any previous requests and focus only on the current one.
+            You will receive requests containing the item name, quantity, the date of the request, and the expected delivery date.
             Make sure to match the name of the requested item exactly with the name in the inventory list.
 
             1. Always call get_inventory_list for the specified date using the get_inventory_list tool.
@@ -125,12 +128,15 @@ class InventoryAgent(ToolCallingAgent):
             4. Always check the estimated delivery date using the get_delivery_date tool if resupply is needed.
             5. Compare the estimated delivery date with the customer's expected delivery date and decide if the order can be fulfilled on time.
 
-            Make sure the item names in your response match exactly with the names in the inventory list. Always provide the following information in your response:
-            - Item name
-            - Requested quantity
-            - Available stock
-            - Resupply amount (if any)
-            - Estimated delivery date (if resupply is needed)
+            Make sure the item names in your response match exactly with the names in the inventory list. Only provide the following information in your response:
+            Order No. (e.g., 001, 002, 003, ...)
+            - item_name
+            - quantity (0 - inf)
+            - stock (0 - inf)
+            - resupply (0 - inf)
+            - estimated_delivery_date (YYYY-MM-DD or N/A)
+
+            No other explanation. The 
 
             """,
         )
@@ -194,8 +200,6 @@ def create_transaction_tool(
     item_name: str,
     transaction_type: str,
     quantity: int,
-    price: float,
-    date: Union[str, datetime],
 ) -> dict:
     """
     Create a transaction for a specific item using the create_transaction function.
@@ -204,8 +208,6 @@ def create_transaction_tool(
         item_name (str): The name of the item for the transaction.
         transaction_type (str): The type of transaction (must be 'stock_orders' or 'sales').
         quantity (int): The quantity of the item involved in the transaction.
-        price (float): The price per unit of the item.
-        date (Union[str, datetime]): The date of the transaction.
     Returns:
         int: The ID of the created transaction.
     """
@@ -213,6 +215,8 @@ def create_transaction_tool(
         transaction_type = "sales"
     if transaction_type in ["stock_order", "stock_orders", "restock"]:
         transaction_type = "stock_orders"
+    price = get_item_price(item_name)
+    price *= quantity
     balance = get_cash_balance(DAY)
     if transaction_type == "stock_orders":
         if balance < price:
@@ -242,19 +246,21 @@ class TransactionAgent(ToolCallingAgent):
             You are a transaction agent responsible for handling financial transactions for customer orders.
             """,
             instructions="""
-            You will receive an inventory check and quotation as input. Extract all important details from them to create the ALL the necessary transactions. Use the total price as price not the unit_price.
+            You will receive information in format:
+            - item_name (str): The name of the item for the transaction.
+            - quantity (int): The quantity of the item for the transaction.
+            - resupply (int): The resupply quantity for the transaction.
+            
+            Extract all important details from them to create the ALL the necessary transactions.
 
-            1.  Always check first if an items needs to be resupplied call the create_transaction_tool to create a stock_orders transaction. User "stock_orders" as the transaction_type.
-            2   After all resupplies are completed, transact the orders for the items. Use "sales" as the transaction_type.
+            1.  Always check if the items needs to be resupplied. Call the create_transaction_tool to create a stock_orders transaction. Use User "stock_orders" as the transaction_type.
+            2   Transact the order for the item. Use "sales" as the transaction_type.
             3.  Check that you have identified all necessary transactions before completing the process.
 
             Check that all transactions have been identified and created before completing the process.
             e.g. 
             - If an item is not in stock sufficiently, create a "stock_orders" transaction for the resupply.
             - After the resupply, create a "sales" transaction for the customer's order.
-
-            Do this for all items in the customer's order. Make no mistakes and ensure all necessary transactions are created.
-
             """,
         )
 
@@ -305,7 +311,7 @@ class OrderDecompositionAgent(ToolCallingAgent):
             3. use the exact keys: "item_name", "quantity", "request_date", and "fulfillment_date" for each item in the list.
             4. Validate the list using the validate_list tool before proceeding.
 
-            Send only the validated list of item details as the output. Nothing else.
+            Send only the validated list of item details as JSON. Nothing else. Return raw json only, no markdown, no explanation.
             """,
         )
 
@@ -322,56 +328,49 @@ class OrchestrationAgent(ToolCallingAgent):
         self.transaction_agent = TransactionAgent(model)
 
         @tool
-        def call_order_decomposition_agent(request: str) -> list[dict]:
-            """Call the OrderDecompositionAgent to decompose a customer order into individual items and their details.
-            Args:
-                request (str): The customer order as a string.
-
-            Returns:
-                str: The response from the OrderDecompositionAgent.
-            """
-            return self.order_decomposition_agent.run(
-                f"Decompose this order: {request} - Always follow your instructions."
-            )
-
-        @tool
         # @mlflow.trace(name="call_inventory_agent", span_type=SpanType.TOOL)
-        def call_inventory_agent(request: str) -> str:
+        def call_inventory_agent(item_name: str, quantity: int, request_date: str, delivery_date: str) -> str:
             """Call the InventoryAgent to check the inventory for a specific item.
             Args:
-                request (str): The request containing item name, quantity, and date.
+                item_name (str): The name of the item to check in the inventory.
+                quantity (int): The quantity of the item to check.
+                request_date (str): The day that the request is made.
+                delivery_date (str): The expected delivery date for the item.
 
             Returns:
                 str: The response from the InventoryAgent.
             """
             return self.inventory_agent.run(
-                f"Check inventory for this item: {request} - Always follow your instructions."
+                f"Check inventory for this item: {item_name}, quantity: {quantity}, request date: {request_date}, delivery date: {delivery_date} - Always follow your instructions."
             )
 
         @tool
-        def call_quotation_agent(request: str) -> str:
+        def call_quotation_agent(item_name: str, quantity: int) -> str:
             """Call the QuotationAgent to generate a quotation for a specific item.
             Args:
-                request (str): The request containing item name, quantity, and date.
+                item_name (str): The name of the item to generate a quotation for.
+                quantity (int): The quantity of the item to generate a quotation for.
 
             Returns:
                 str: The response from the QuotationAgent.
             """
             return self.quotation_agent.run(
-                f"Generate quotation for this item: {request} - Always follow your instructions."
+                f"Generate quotation for this item: {item_name}, quantity: {quantity} - Always follow your instructions."
             )
 
         @tool
-        def call_transaction_agent(request: str) -> str:
+        def call_transaction_agent(item_name: str, quantity: int, resupply: int) -> str:
             """Call the TransactionAgent to create a transaction for a specific item.
             Args:
-                request (str): The request containing item name, quantity, and total price.
+                item_name (str): The name of the item for the transaction.
+                quantity (int): The quantity of the item for the transaction.
+                resupply (int): The resupply quantity for the transaction.
 
             Returns:
                 str: The response from the TransactionAgent.
             """
             return self.transaction_agent.run(
-                f"Create transactions for this order: {request} - Always follow your instructions."
+                f"Create transactions for this order: {item_name}, quantity: {quantity}, resupply: {resupply} - Always follow your instructions."
             )
 
         super().__init__(
@@ -392,9 +391,9 @@ class OrchestrationAgent(ToolCallingAgent):
             - TransactionAgent: Responsible for creating transactions based on inventory and quotation results.
 
             Process orders by:
-            1. Check the inventory for the item using call_inventory_agent.
-            2. Get a quotation for the item using call_quotation_agent. Always use the exact name that is returned from the inventory check.
-            3. Forward both the inventory check result and the quotation to the call_transaction_agent
+            1. Check the inventory for the item using call_inventory_agent. 
+            2. Get a quotation for the item using call_quotation_agent. Send the item details exactly as received from the inventory check.
+            3. Forward both the inventory check result and the quotation to the call_transaction_agent. Send the information exactly as received from the previous steps.
             4. Summarize the inventory, quotation and transaction results and inform the customer of the outcome.
 
             Reply with the final summary.
@@ -402,27 +401,31 @@ class OrchestrationAgent(ToolCallingAgent):
         )
 
     def process_order(self, request):
-        decomposed_order = self.call_order_decomposition_agent(request)
+        decomposed_order = self.order_decomposition_agent.run(
+            f"Decompose this order: {request} - Always follow your instructions."
+        )
+        print(decomposed_order)
+        order_list = json.loads(decomposed_order)
 
         results = []
-        for item in decomposed_order:
+        for item in order_list:
 
             result = self.run(
-                f"Customer order: {request}. Always follow your instructions."
+                f"Customer order: {item}. Always follow your instructions."
             )
-            result.append(result)
+            results.append(result)
 
         role = "You are a final summary agent responsible for evaluating the individual item processing and providing the customer with a comprehensive final feedback."
         content = f"""
         The customer had the following request: {request}
 
         Your orchestration agent has processed the individual items as follows: {results}
-        Please provide a comprehensive final feedback for the customer based on these results.
+        Please provide a very short final feedback for the customer based on these results. Provide the sum of all orders as total price.
         """
 
-        response = model.generate(role=role, content=content)
+        response = model.generate([{"role": "user", "content": content}])
 
-        return response
+        return response.content
 
 
 def run():
@@ -475,9 +478,7 @@ def run():
         # Process request
         request_with_date = f"{row['request']} (Date of request: {request_date})"
 
-        response = orchestration_agent.process_order(
-            "I want to order 500 pages of A4 paper by 20.04.2025"
-        )
+        response = orchestration_agent.process_order(request_with_date)
         # Update state
         report = generate_financial_report(request_date)
         current_cash = report["cash_balance"]
