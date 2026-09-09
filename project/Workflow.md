@@ -77,7 +77,7 @@ All messages passed between agents are text containing the request, exact item n
 
 ## Reflection
 
-The system still has issues with serializing orders. A major (intended) source of errors is that the customer is ordering item that don't exist or are paraphrased. This is unrealistic as no company uses e-mail to finalize an order but rather a shop-like system.
+The system still has issues with serializing orders. A major (intended) source of errors is that the customer is ordering item that don't exist or are paraphrased.
 
 The multiagent workflow could work work much better if such a system would be implemented. Instead of using item names, the entire ordering system should be remodelled to orders using item ids.
 
